@@ -1,19 +1,33 @@
 {
   "name": "backend-course-2025-7",
   "version": "1.0.0",
-  "description": "yo boys",
+  "description": "Inventory service for backend course Lab 7 (Docker + DB + Debug)",
   "main": "main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node main.js",
+    "dev": "nodemon --inspect=0.0.0.0:9229 main.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Stevieof/backend-course-2025-7.git"
+    "url": "git+https://github.com/stevieof/backend-course-2025-7.git"
   },
+  "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/Stevieof/backend-course-2025-7/issues"
+    "url": "https://github.com/stevieof/backend-course-2025-7/issues"
   },
-  "homepage": "https://github.com/Stevieof/backend-course-2025-7#readme"
+  "homepage": "https://github.com/stevieof/backend-course-2025-7#readme",
+  "dependencies": {
+    "commander": "^14.0.2",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "pg": "^8.13.1",
+    "superagent": "^10.2.3",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
 }

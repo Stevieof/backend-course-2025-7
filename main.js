@@ -1,16 +1,4 @@
-// Лабораторна робота №6: Створення сервісу інвентаризації
-//
-// CLI-параметри (обов'язкові):
-//   -h, --host   – хост сервера
-//   -p, --port   – порт сервера
-//   -c, --cache  – директорія для зберігання фото (кеш)
-//
-// Технології (як в методичці):
-//   - node:http як HTTP-сервер
-//   - express як роутер/обробник
-//   - commander для CLI
-//   - multer для multipart/form-data (фото)
-//   - swagger-ui-express для /docs
+require("dotenv").config();
 
 const http = require("http");
 const path = require("path");
@@ -19,19 +7,23 @@ const express = require("express");
 const multer = require("multer");
 const { Command } = require("commander");
 const swaggerUi = require("swagger-ui-express");
-
-// =======================
-// 1. CLI через commander
-// =======================
-
+const { Pool } = require("pg");
 const program = new Command();
+const defaultHost = process.env.HOST || "0.0.0.0";
+const defaultPort = process.env.PORT || "3000";
+const defaultCacheDir =
+    process.env.CACHE_DIR || path.resolve(__dirname, "cache");
 
 program
-    .name("backend-course-2025-6")
-    .description("Inventory service (Lab 6)")
-    .requiredOption("-h, --host <host>", "server host")
-    .requiredOption("-p, --port <port>", "server port")
-    .requiredOption("-c, --cache <dir>", "cache directory for photos");
+    .name("backend-course-2025-7")
+    .description("Inventory service (Lab 7: Docker + DB)")
+    .option("-h, --host <host>", "server host", defaultHost)
+    .option("-p, --port <port>", "server port", defaultPort)
+    .option(
+        "-c, --cache <dir>",
+        "cache directory for photos",
+        defaultCacheDir
+    );
 
 program.parse(process.argv);
 const opts = program.opts();
@@ -40,26 +32,28 @@ const HOST = opts.host;
 const PORT = Number(opts.port);
 const CACHE_DIR = path.resolve(opts.cache);
 
-// =======================
-// 2. Папка кешу (фото)
-// =======================
+#dbshka
+const DB_HOST = process.env.DB_HOST || "localhost";
+const DB_PORT = Number(process.env.DB_PORT || 5432);
+const DB_USER = process.env.DB_USER || "postgres";
+const DB_PASSWORD = process.env.DB_PASSWORD || "postgres";
+const DB_NAME = process.env.DB_NAME || "inventorydb";
+
+const pool = new Pool({
+    host: DB_HOST,
+    port: DB_PORT,
+    user: DB_USER,
+    password: DB_PASSWORD,
+    database: DB_NAME,
+});
 
 fs.mkdirSync(CACHE_DIR, { recursive: true });
-
-// =======================
-// 3. Express застосунок
-// =======================
 
 const app = express();
 const ROOT_DIR = __dirname;
 
-// для JSON та x-www-form-urlencoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-
-// =======================
-// 4. multer для фото
-// =======================
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, CACHE_DIR),
@@ -71,28 +65,23 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// =======================
-// 5. "База даних" в пам'яті
-// =======================
-
-const inventory = new Map(); // id -> { id, name, description, photoFileName }
-let nextId = 1;
-
-function buildItemDto(item) {
+function buildItemDtoFromRow(row) {
     return {
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        photoUrl: item.photoFileName ? `/inventory/${item.id}/photo` : null,
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        photoUrl: row.photo_file_name ? `/inventory/${row.id}/photo` : null,
     };
 }
 
-// =======================
-// 6. 405 Method Not Allowed
-// =======================
-//
-// Цей middleware перевіряє шлях і дозволені методи.
-// Якщо метод не входить у дозволені – повертає 405 + Allow.
+async function getItemById(id) {
+    const result = await pool.query(
+        "SELECT id, name, description, photo_file_name FROM items WHERE id = $1",
+        [id]
+    );
+    return result.rows[0] || null;
+}
+
 
 app.use((req, res, next) => {
     const p = req.path;
@@ -117,10 +106,6 @@ app.use((req, res, next) => {
     return next();
 });
 
-// =======================
-// 7. HTML-форми
-// =======================
-
 app.get("/RegisterForm.html", (req, res) => {
     res.sendFile(path.join(ROOT_DIR, "RegisterForm.html"));
 });
@@ -129,196 +114,240 @@ app.get("/SearchForm.html", (req, res) => {
     res.sendFile(path.join(ROOT_DIR, "SearchForm.html"));
 });
 
-// =======================
-// 8. POST /register
-// =======================
-//
-// Приймає multipart/form-data:
-//   inventory_name (обов'язкове)
-//   description
-//   photo (файл)
-
 app.post(
     "/register",
     upload.single("photo"),
-    (req, res) => {
-        const { inventory_name, description } = req.body;
+    async (req, res, next) => {
+        try {
+            const { inventory_name, description } = req.body;
 
-        if (!inventory_name || inventory_name.trim() === "") {
-            return res.status(400).send("Bad Request: inventory_name is required");
+            if (!inventory_name || inventory_name.trim() === "") {
+                return res
+                    .status(400)
+                    .send("Bad Request: inventory_name is required");
+            }
+
+            const photoFileName = req.file ? path.basename(req.file.path) : null;
+
+            const result = await pool.query(
+                `
+                INSERT INTO items (name, description, photo_file_name)
+                VALUES ($1, $2, $3)
+                RETURNING id, name, description, photo_file_name
+            `,
+                [inventory_name.trim(), (description || "").trim(), photoFileName]
+            );
+
+            const row = result.rows[0];
+            res.status(201).json(buildItemDtoFromRow(row));
+        } catch (err) {
+            console.error(err);
+            next(err);
         }
-
-        const id = nextId++;
-        const item = {
-            id,
-            name: inventory_name.trim(),
-            description: (description || "").trim(),
-            photoFileName: req.file ? path.basename(req.file.path) : null,
-        };
-
-        inventory.set(String(id), item);
-
-        res.status(201).json(buildItemDto(item));
     }
 );
 
-// =======================
-// 9. GET /inventory – список
-// =======================
-
-app.get("/inventory", (req, res) => {
-    const items = Array.from(inventory.values()).map(buildItemDto);
-    res.status(200).json(items);
+app.get("/inventory", async (req, res, next) => {
+    try {
+        const result = await pool.query(
+            "SELECT id, name, description, photo_file_name FROM items ORDER BY id ASC"
+        );
+        const items = result.rows.map(buildItemDtoFromRow);
+        res.status(200).json(items);
+    } catch (err) {
+        console.error(err);
+        next(err);
+    }
 });
 
-// =======================
-// 10. GET /inventory/:id
-// =======================
+app.get("/inventory/:id", async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        if (Number.isNaN(id)) {
+            return res.status(400).send("Bad Request: invalid id");
+        }
 
-app.get("/inventory/:id", (req, res) => {
-    const id = String(req.params.id);
-    const item = inventory.get(id);
-
-    if (!item) {
-        return res.status(404).send("Not Found");
-    }
-
-    res.status(200).json(buildItemDto(item));
-});
-
-// =======================
-// 11. PUT /inventory/:id
-// =======================
-//
-// Оновлюємо name/description (JSON)
-
-app.put("/inventory/:id", (req, res) => {
-    const id = String(req.params.id);
-    const item = inventory.get(id);
-
-    if (!item) {
-        return res.status(404).send("Not Found");
-    }
-
-    const { name, description } = req.body;
-
-    if (typeof name === "string") {
-        item.name = name.trim();
-    }
-    if (typeof description === "string") {
-        item.description = description.trim();
-    }
-
-    res.status(200).json(buildItemDto(item));
-});
-
-// =======================
-// 12. GET /inventory/:id/photo
-// =======================
-
-app.get("/inventory/:id/photo", (req, res) => {
-    const id = String(req.params.id);
-    const item = inventory.get(id);
-
-    if (!item || !item.photoFileName) {
-        return res.status(404).send("Not Found");
-    }
-
-    const filePath = path.join(CACHE_DIR, item.photoFileName);
-    if (!fs.existsSync(filePath)) {
-        return res.status(404).send("Not Found");
-    }
-
-    res.status(200);
-    res.set("Content-Type", "image/jpeg");
-    res.sendFile(filePath);
-});
-
-// =======================
-// 13. PUT /inventory/:id/photo
-// =======================
-//
-// Оновлення фото для існуючого запису
-
-app.put(
-    "/inventory/:id/photo",
-    upload.single("photo"),
-    (req, res) => {
-        const id = String(req.params.id);
-        const item = inventory.get(id);
+        const item = await getItemById(id);
 
         if (!item) {
             return res.status(404).send("Not Found");
         }
 
-        if (!req.file) {
-            return res.status(400).send("Bad Request: photo is required");
+        res.status(200).json(buildItemDtoFromRow(item));
+    } catch (err) {
+        console.error(err);
+        next(err);
+    }
+});
+
+app.put("/inventory/:id", async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        if (Number.isNaN(id)) {
+            return res.status(400).send("Bad Request: invalid id");
         }
 
-        // видаляємо старий файл, якщо був
-        if (item.photoFileName) {
-            const oldPath = path.join(CACHE_DIR, item.photoFileName);
-            fs.unlink(oldPath, () => {});
+        const existing = await getItemById(id);
+        if (!existing) {
+            return res.status(404).send("Not Found");
         }
 
-        item.photoFileName = path.basename(req.file.path);
+        const { name, description } = req.body;
 
-        res.status(200).json(buildItemDto(item));
+        const newName =
+            typeof name === "string" && name.trim() !== ""
+                ? name.trim()
+                : existing.name;
+        const newDescription =
+            typeof description === "string"
+                ? description.trim()
+                : existing.description;
+
+        const result = await pool.query(
+            `
+            UPDATE items
+            SET name = $1,
+                description = $2
+            WHERE id = $3
+            RETURNING id, name, description, photo_file_name
+        `,
+            [newName, newDescription, id]
+        );
+
+        const row = result.rows[0];
+        res.status(200).json(buildItemDtoFromRow(row));
+    } catch (err) {
+        console.error(err);
+        next(err);
+    }
+});
+
+app.get("/inventory/:id/photo", async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        if (Number.isNaN(id)) {
+            return res.status(400).send("Bad Request: invalid id");
+        }
+
+        const item = await getItemById(id);
+
+        if (!item || !item.photo_file_name) {
+            return res.status(404).send("Not Found");
+        }
+
+        const filePath = path.join(CACHE_DIR, item.photo_file_name);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).send("Not Found");
+        }
+
+        res.status(200);
+        res.sendFile(filePath);
+    } catch (err) {
+        console.error(err);
+        next(err);
+    }
+});
+
+app.put(
+    "/inventory/:id/photo",
+    upload.single("photo"),
+    async (req, res, next) => {
+        try {
+            const id = Number(req.params.id);
+            if (Number.isNaN(id)) {
+                return res.status(400).send("Bad Request: invalid id");
+            }
+
+            const existing = await getItemById(id);
+            if (!existing) {
+                return res.status(404).send("Not Found");
+            }
+
+            if (!req.file) {
+                return res.status(400).send("Bad Request: photo is required");
+            }
+
+            // видаляємо старий файл, якщо був
+            if (existing.photo_file_name) {
+                const oldPath = path.join(CACHE_DIR, existing.photo_file_name);
+                fs.unlink(oldPath, () => {});
+            }
+
+            const newPhotoFileName = path.basename(req.file.path);
+
+            const result = await pool.query(
+                `
+                UPDATE items
+                SET photo_file_name = $1
+                WHERE id = $2
+                RETURNING id, name, description, photo_file_name
+            `,
+                [newPhotoFileName, id]
+            );
+
+            const row = result.rows[0];
+            res.status(200).json(buildItemDtoFromRow(row));
+        } catch (err) {
+            console.error(err);
+            next(err);
+        }
     }
 );
 
-// =======================
-// 14. DELETE /inventory/:id
-// =======================
+app.delete("/inventory/:id", async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        if (Number.isNaN(id)) {
+            return res.status(400).send("Bad Request: invalid id");
+        }
 
-app.delete("/inventory/:id", (req, res) => {
-    const id = String(req.params.id);
-    const item = inventory.get(id);
+        const existing = await getItemById(id);
+        if (!existing) {
+            return res.status(404).send("Not Found");
+        }
 
-    if (!item) {
-        return res.status(404).send("Not Found");
+        if (existing.photo_file_name) {
+            const photoPath = path.join(CACHE_DIR, existing.photo_file_name);
+            fs.unlink(photoPath, () => {});
+        }
+
+        await pool.query("DELETE FROM items WHERE id = $1", [id]);
+
+        res.status(200).send("OK");
+    } catch (err) {
+        console.error(err);
+        next(err);
     }
-
-    if (item.photoFileName) {
-        const photoPath = path.join(CACHE_DIR, item.photoFileName);
-        fs.unlink(photoPath, () => {});
-    }
-
-    inventory.delete(id);
-
-    res.status(200).send("OK");
 });
 
-// =======================
-// 15. POST /search
-// =======================
-//
-// Приймає x-www-form-urlencoded:
-//   id
-//   has_photo (on / undefined)
-//
-// Повертає текстовий опис елемента.
+app.post("/search", async (req, res, next) => {
+    try {
+        const { id, has_photo } = req.body;
+        const numericId = Number(id);
 
-app.post("/search", (req, res) => {
-    const { id, has_photo } = req.body;
+        if (Number.isNaN(numericId)) {
+            return res.status(400).send("Bad Request: invalid id");
+        }
 
-    const item = inventory.get(String(id));
-    if (!item) {
-        return res.status(404).send("Not Found");
+        const item = await getItemById(numericId);
+        if (!item) {
+            return res.status(404).send("Not Found");
+        }
+
+        let result = `ID: ${item.id}\nName: ${item.name}\nDescription:\n${
+            item.description || ""
+        }`;
+
+        if (has_photo && item.photo_file_name) {
+            result += `\nPhoto: /inventory/${item.id}/photo`;
+        }
+
+        res.status(200).send(result);
+    } catch (err) {
+        console.error(err);
+        next(err);
     }
-
-    let result = `ID: ${item.id}\nName: ${item.name}\nDescription:\n${item.description || ""}`;
-
-    if (has_photo && item.photoFileName) {
-        result += `\nPhoto: /inventory/${item.id}/photo`;
-    }
-
-    res.status(200).send(result);
 });
-
-// =======================
-// 16. Swagger /docs
-// =======================
 
 const swaggerDocument = {
     openapi: "3.0.0",
@@ -367,7 +396,7 @@ const swaggerDocument = {
                     {
                         name: "id",
                         in: "path",
-                        schema: { type: "string" },
+                        schema: { type: "integer" },
                         required: true,
                     },
                 ],
@@ -382,7 +411,7 @@ const swaggerDocument = {
                     {
                         name: "id",
                         in: "path",
-                        schema: { type: "string" },
+                        schema: { type: "integer" },
                         required: true,
                     },
                 ],
@@ -411,7 +440,7 @@ const swaggerDocument = {
                     {
                         name: "id",
                         in: "path",
-                        schema: { type: "string" },
+                        schema: { type: "integer" },
                         required: true,
                     },
                 ],
@@ -428,7 +457,7 @@ const swaggerDocument = {
                     {
                         name: "id",
                         in: "path",
-                        schema: { type: "string" },
+                        schema: { type: "integer" },
                         required: true,
                     },
                 ],
@@ -443,7 +472,7 @@ const swaggerDocument = {
                     {
                         name: "id",
                         in: "path",
-                        schema: { type: "string" },
+                        schema: { type: "integer" },
                         required: true,
                     },
                 ],
@@ -496,21 +525,25 @@ const swaggerDocument = {
 
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-// =======================
-// 17. 404 за замовчуванням
-// =======================
+app.use((err, req, res, next) => {
+    console.error("Unhandled error:", err);
+    if (res.headersSent) {
+        return next(err);
+    }
+    res.status(500).send("Internal Server Error");
+});
+
 
 app.use((req, res) => {
     res.status(404).send("Not Found");
 });
-
-// =======================
-// 18. Старт node:http сервера
-// =======================
 
 const server = http.createServer(app);
 
 server.listen(PORT, HOST, () => {
     console.log(`Inventory service listening at http://${HOST}:${PORT}`);
     console.log(`Photos cache directory: ${CACHE_DIR}`);
+    console.log(
+        `DB: postgres://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}`
+    );
 });
