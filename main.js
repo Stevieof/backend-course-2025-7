@@ -32,7 +32,8 @@ const HOST = opts.host;
 const PORT = Number(opts.port);
 const CACHE_DIR = path.resolve(opts.cache);
 
-#dbshka
+// #dbshka
+
 const DB_HOST = process.env.DB_HOST || "localhost";
 const DB_PORT = Number(process.env.DB_PORT || 5432);
 const DB_USER = process.env.DB_USER || "postgres";
