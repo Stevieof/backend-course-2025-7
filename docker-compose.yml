@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  inventory-service:
+    build: .
+    container_name: inventory-service
+    ports:
+      - "3000:3000"       # host:container
+    volumes:
+      - ./cache:/cache    # зберігати фото поза контейнером
+    restart: unless-stopped

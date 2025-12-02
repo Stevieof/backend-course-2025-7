@@ -1,0 +1,19 @@
+{
+  "name": "backend-course-2025-7",
+  "version": "1.0.0",
+  "description": "yo boys",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Stevieof/backend-course-2025-7.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Stevieof/backend-course-2025-7/issues"
+  },
+  "homepage": "https://github.com/Stevieof/backend-course-2025-7#readme"
+}
